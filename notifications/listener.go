@@ -70,6 +70,16 @@ func (nl *removerListener) Remove(ctx context.Context, name reference.Named) err
 	return nl.listener.RepoDeleted(name)
 }
 
+// Referrers returns the referrer service of the wrapped repository. Listing
+// referrers does not dispatch any events.
+func (rl *repositoryListener) Referrers(ctx context.Context) (distribution.ReferrerService, error) {
+	provider, ok := rl.Repository.(distribution.ReferrerProvider)
+	if !ok {
+		return nil, distribution.ErrUnsupported
+	}
+	return provider.Referrers(ctx)
+}
+
 func (rl *repositoryListener) Manifests(ctx context.Context, options ...distribution.ManifestServiceOption) (distribution.ManifestService, error) {
 	manifests, err := rl.Repository.Manifests(ctx, options...)
 	if err != nil {

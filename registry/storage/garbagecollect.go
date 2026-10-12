@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/distribution/distribution/v3"
+	"github.com/distribution/distribution/v3/manifest/ocischema"
 	"github.com/distribution/distribution/v3/registry/storage/driver"
 	"github.com/distribution/reference"
 	"github.com/opencontainers/go-digest"
@@ -41,6 +42,7 @@ func MarkAndSweep(ctx context.Context, storageDriver driver.StorageDriver, regis
 	markSet := make(map[digest.Digest]struct{})
 	deleteLayerSet := make(map[string][]digest.Digest)
 	manifestArr := make([]ManifestDel, 0)
+	var repoNames []string
 	err := repositoryEnumerator.Enumerate(ctx, func(repoName string) error {
 		if !opts.Quiet {
 			emit(repoName)
@@ -65,6 +67,21 @@ func MarkAndSweep(ctx context.Context, storageDriver driver.StorageDriver, regis
 		if !ok {
 			return fmt.Errorf("unable to convert ManifestService into ManifestEnumerator")
 		}
+
+		repoNames = append(repoNames, repoName)
+		markBlob := func(d digest.Digest) bool {
+			_, marked := markSet[d]
+			if !marked {
+				markSet[d] = struct{}{}
+				if !opts.Quiet {
+					emit("%s: marking blob %s", repoName, d)
+				}
+			}
+			return marked
+		}
+
+		// untagged manifests of this repository start at this offset
+		untaggedOffset := len(manifestArr)
 
 		err = manifestEnumerator.Enumerate(ctx, func(dgst digest.Digest) error {
 			if opts.RemoveUntagged {
@@ -97,16 +114,7 @@ func MarkAndSweep(ctx context.Context, storageDriver driver.StorageDriver, regis
 			}
 			markSet[dgst] = struct{}{}
 
-			return markManifestReferences(dgst, manifestService, ctx, func(d digest.Digest) bool {
-				_, marked := markSet[d]
-				if !marked {
-					markSet[d] = struct{}{}
-					if !opts.Quiet {
-						emit("%s: marking blob %s", repoName, d)
-					}
-				}
-				return marked
-			})
+			return markManifestReferences(dgst, manifestService, ctx, markBlob)
 		})
 
 		if err != nil {
@@ -118,6 +126,20 @@ func MarkAndSweep(ctx context.Context, storageDriver driver.StorageDriver, regis
 			if _, ok := err.(driver.PathNotFoundError); !ok {
 				return err
 			}
+		}
+
+		// Untagged manifests referring to a manifest which is kept are kept
+		// as well, otherwise the referrers of an image would not survive.
+		err = markReferrers(ctx, manifestService, manifestArr[untaggedOffset:], markSet, func(dgst digest.Digest) error {
+			if !opts.Quiet {
+				emit("%s: marking referrer manifest %s ", repoName, dgst)
+			}
+			markSet[dgst] = struct{}{}
+
+			return markManifestReferences(dgst, manifestService, ctx, markBlob)
+		})
+		if err != nil {
+			return err
 		}
 		blobService := repository.Blobs(ctx)
 		layerEnumerator, ok := blobService.(distribution.ManifestEnumerator)
@@ -153,6 +175,16 @@ func MarkAndSweep(ctx context.Context, storageDriver driver.StorageDriver, regis
 			}
 		}
 	}
+
+	// The referrers index may hold entries of manifests which have been
+	// deleted, either above or through the API.
+	for _, repoName := range repoNames {
+		err = sweepReferrerLinks(ctx, storageDriver, vacuum, repoName, opts)
+		if err != nil {
+			return fmt.Errorf("failed to sweep referrers of repo %s: %v", repoName, err)
+		}
+	}
+
 	blobService := registry.Blobs()
 	deleteSet := make(map[digest.Digest]struct{})
 	err = blobService.Enumerate(ctx, func(dgst digest.Digest) error {
@@ -236,5 +268,103 @@ func markManifestReferences(dgst digest.Digest, manifestService distribution.Man
 			}
 		}
 	}
+	return nil
+}
+
+// markReferrers calls mark for each of the untagged manifests which has to be
+// kept because the manifest it refers to with its subject is kept. As mark is
+// expected to add the manifest to the markSet, the referrers of a referrer
+// are kept as well.
+func markReferrers(ctx context.Context, manifestService distribution.ManifestService, untagged []ManifestDel, markSet map[digest.Digest]struct{}, mark func(digest.Digest) error) error {
+	// subjects of the untagged manifests which have one
+	subjects := make(map[digest.Digest]digest.Digest)
+	candidates := make(map[digest.Digest]struct{}, len(untagged))
+	for _, obj := range untagged {
+		candidates[obj.Digest] = struct{}{}
+
+		manifest, err := manifestService.Get(ctx, obj.Digest)
+		if err != nil {
+			// manifests which cannot be read do not keep anything alive
+			continue
+		}
+		if subject := ocischema.SubjectOf(manifest); subject != nil {
+			subjects[obj.Digest] = subject.Digest
+		}
+	}
+
+	// a subject is kept if it is present in the repository and is either
+	// tagged or marked
+	kept := func(subject digest.Digest) bool {
+		if _, marked := markSet[subject]; !marked {
+			if _, untagged := candidates[subject]; untagged {
+				return false
+			}
+		}
+		exists, _ := manifestService.Exists(ctx, subject)
+		return exists
+	}
+
+	for progress := true; progress; {
+		progress = false
+		for _, obj := range untagged {
+			subject, ok := subjects[obj.Digest]
+			if !ok {
+				continue
+			}
+			if _, marked := markSet[obj.Digest]; marked {
+				delete(subjects, obj.Digest)
+				continue
+			}
+			if !kept(subject) {
+				continue
+			}
+			if err := mark(obj.Digest); err != nil {
+				return err
+			}
+			delete(subjects, obj.Digest)
+			progress = true
+		}
+	}
+
+	return nil
+}
+
+// sweepReferrerLinks removes the entries of the referrers index of the named
+// repository which point to manifests no longer present in the repository.
+func sweepReferrerLinks(ctx context.Context, storageDriver driver.StorageDriver, vacuum Vacuum, repoName string, opts GCOpts) error {
+	type referrerLink struct {
+		subject, referrer digest.Digest
+	}
+
+	var stale []referrerLink
+	err := enumerateReferrerLinks(ctx, storageDriver, repoName, func(subject, referrer digest.Digest) error {
+		revisionLinkPath, err := manifestRevisionLinkPath(repoName, referrer)
+		if err != nil {
+			return err
+		}
+		if _, err := storageDriver.Stat(ctx, revisionLinkPath); err != nil {
+			if _, ok := err.(driver.PathNotFoundError); !ok {
+				return err
+			}
+			stale = append(stale, referrerLink{subject: subject, referrer: referrer})
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, link := range stale {
+		if !opts.Quiet {
+			emit("%s: referrer link eligible for deletion: %s -> %s", repoName, link.referrer, link.subject)
+		}
+		if opts.DryRun {
+			continue
+		}
+		if err := vacuum.RemoveReferrerLink(repoName, link.subject, link.referrer); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

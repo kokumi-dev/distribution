@@ -7,6 +7,7 @@ import (
 	"github.com/distribution/distribution/v3/registry/api/errcode"
 	"github.com/distribution/reference"
 	"github.com/opencontainers/go-digest"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 var routeDescriptorsMap map[string]RouteDescriptor
@@ -49,6 +50,33 @@ var (
 		Required:    true,
 		Format:      digest.DigestRegexp.String(),
 		Description: `Digest of desired blob.`,
+	}
+
+	subjectDigestPathParameter = ParameterDescriptor{
+		Name:        "digest",
+		Type:        "path",
+		Required:    true,
+		Format:      digest.DigestRegexp.String(),
+		Description: `Digest of the manifest to list the referrers of.`,
+	}
+
+	invalidSubjectDigestResponseDescriptor = ResponseDescriptor{
+		Name:        "Invalid Digest",
+		Description: "The provided `digest` is not a valid digest.",
+		StatusCode:  http.StatusBadRequest,
+		ErrorCodes: []errcode.ErrorCode{
+			errcode.ErrorCodeDigestInvalid,
+		},
+		Body: BodyDescriptor{
+			ContentType: "application/json",
+			Format:      errorsBody,
+		},
+	}
+
+	referrersUnavailableResponseDescriptor = ResponseDescriptor{
+		Name:        "Referrers Unavailable",
+		Description: "The registry cannot list referrers, for example when it is configured as a pull through cache. Clients should fall back to the referrers tag schema.",
+		StatusCode:  http.StatusNotFound,
 	}
 
 	hostHeader = ParameterDescriptor{
@@ -233,6 +261,24 @@ const (
     ],
     "history": <v1 images>,
     "signature": <JWS>
+}`
+
+	referrersBody = `{
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "manifests": [
+        {
+            "mediaType": "<media type>",
+            "digest": "<digest>",
+            "size": <size>,
+            "artifactType": "<artifact type>",
+            "annotations": {
+                "<key>": "<value>",
+                ...
+            }
+        },
+        ...
+    ]
 }`
 
 	errorsBody = `{
@@ -514,6 +560,101 @@ var routeDescriptors = []RouteDescriptor{
 							invalidPaginationResponseDescriptor,
 							unauthorizedResponseDescriptor,
 							repositoryNotFoundResponseDescriptor,
+							deniedResponseDescriptor,
+							tooManyRequestsDescriptor,
+						},
+					},
+				},
+			},
+		},
+	},
+	{
+		Name:        RouteNameReferrers,
+		Path:        "/v2/{name:" + reference.NameRegexp.String() + "}/referrers/{digest:[^/]+}",
+		Entity:      "Referrers",
+		Description: "Retrieve the manifests which refer to another manifest through their `subject` field.",
+		Methods: []MethodDescriptor{
+			{
+				Method:      http.MethodGet,
+				Description: "Fetch the list of referrers of the manifest identified by `digest` under the repository identified by `name`. The manifest identified by `digest` is not required to exist.",
+				Requests: []RequestDescriptor{
+					{
+						Name:        "Referrers",
+						Description: "Return all referrers of the manifest",
+						Headers: []ParameterDescriptor{
+							hostHeader,
+							authHeader,
+						},
+						PathParameters: []ParameterDescriptor{
+							nameParameterDescriptor,
+							subjectDigestPathParameter,
+						},
+						Successes: []ResponseDescriptor{
+							{
+								StatusCode:  http.StatusOK,
+								Description: "An image index listing the descriptors of the referrers. The list is empty if there are no referrers.",
+								Headers: []ParameterDescriptor{
+									{
+										Name:        "Content-Length",
+										Type:        "integer",
+										Description: "Length of the JSON response body.",
+										Format:      "<length>",
+									},
+								},
+								Body: BodyDescriptor{
+									ContentType: v1.MediaTypeImageIndex,
+									Format:      referrersBody,
+								},
+							},
+						},
+						Failures: []ResponseDescriptor{
+							invalidSubjectDigestResponseDescriptor,
+							unauthorizedResponseDescriptor,
+							referrersUnavailableResponseDescriptor,
+							deniedResponseDescriptor,
+							tooManyRequestsDescriptor,
+						},
+					},
+					{
+						Name:           "Referrers Filtered",
+						Description:    "Return the referrers of the manifest with the requested artifact type.",
+						PathParameters: []ParameterDescriptor{nameParameterDescriptor, subjectDigestPathParameter},
+						QueryParameters: []ParameterDescriptor{
+							{
+								Name:        "artifactType",
+								Type:        "query",
+								Format:      "<media type>",
+								Description: "Limit the response to referrers with this artifact type. For image manifests without an artifact type, the media type of the config is used.",
+							},
+						},
+						Successes: []ResponseDescriptor{
+							{
+								StatusCode:  http.StatusOK,
+								Description: "An image index listing the descriptors of the referrers with the requested artifact type.",
+								Headers: []ParameterDescriptor{
+									{
+										Name:        "Content-Length",
+										Type:        "integer",
+										Description: "Length of the JSON response body.",
+										Format:      "<length>",
+									},
+									{
+										Name:        "OCI-Filters-Applied",
+										Type:        "string",
+										Description: "Comma separated list of the filters applied to the response.",
+										Format:      "artifactType",
+									},
+								},
+								Body: BodyDescriptor{
+									ContentType: v1.MediaTypeImageIndex,
+									Format:      referrersBody,
+								},
+							},
+						},
+						Failures: []ResponseDescriptor{
+							invalidSubjectDigestResponseDescriptor,
+							unauthorizedResponseDescriptor,
+							referrersUnavailableResponseDescriptor,
 							deniedResponseDescriptor,
 							tooManyRequestsDescriptor,
 						},

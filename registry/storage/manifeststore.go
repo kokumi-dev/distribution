@@ -134,18 +134,44 @@ func (ms *manifestStore) Get(ctx context.Context, dgst digest.Digest, options ..
 func (ms *manifestStore) Put(ctx context.Context, manifest distribution.Manifest, options ...distribution.ManifestServiceOption) (digest.Digest, error) {
 	dcontext.GetLogger(ms.ctx).Debug("(*manifestStore).Put")
 
-	switch manifest.(type) {
-	case *schema2.DeserializedManifest:
-		return ms.schema2Handler.Put(ctx, manifest, ms.skipDependencyVerification)
-	case *ocischema.DeserializedManifest:
-		return ms.ocischemaHandler.Put(ctx, manifest, ms.skipDependencyVerification)
-	case *manifestlist.DeserializedManifestList:
-		return ms.manifestListHandler.Put(ctx, manifest, ms.skipDependencyVerification)
-	case *ocischema.DeserializedImageIndex:
-		return ms.ocischemaIndexHandler.Put(ctx, manifest, ms.skipDependencyVerification)
+	subject := ocischema.SubjectOf(manifest)
+	if subject != nil {
+		if err := subject.Digest.Validate(); err != nil {
+			dcontext.GetLogger(ms.ctx).Debugf("invalid subject digest %q: %v", subject.Digest, err)
+			return "", distribution.ErrManifestVerification{digest.ErrDigestInvalidFormat}
+		}
 	}
 
-	return "", fmt.Errorf("unrecognized manifest type %T", manifest)
+	var (
+		dgst digest.Digest
+		err  error
+	)
+	switch manifest.(type) {
+	case *schema2.DeserializedManifest:
+		dgst, err = ms.schema2Handler.Put(ctx, manifest, ms.skipDependencyVerification)
+	case *ocischema.DeserializedManifest:
+		dgst, err = ms.ocischemaHandler.Put(ctx, manifest, ms.skipDependencyVerification)
+	case *manifestlist.DeserializedManifestList:
+		dgst, err = ms.manifestListHandler.Put(ctx, manifest, ms.skipDependencyVerification)
+	case *ocischema.DeserializedImageIndex:
+		dgst, err = ms.ocischemaIndexHandler.Put(ctx, manifest, ms.skipDependencyVerification)
+	default:
+		return "", fmt.Errorf("unrecognized manifest type %T", manifest)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	// Index the manifest as a referrer of its subject. The subject is not
+	// required to exist.
+	if subject != nil {
+		referrers := &referrerStore{repository: ms.repository, blobStore: ms.blobStore.blobStore}
+		if err := referrers.link(ctx, subject.Digest, dgst); err != nil {
+			return "", err
+		}
+	}
+
+	return dgst, nil
 }
 
 // Delete removes the revision of the specified manifest.

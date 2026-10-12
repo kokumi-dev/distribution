@@ -88,6 +88,23 @@ func TestRouter(t *testing.T) {
 			},
 		},
 		{
+			RouteName:  RouteNameReferrers,
+			RequestURI: "/v2/foo/bar/referrers/sha256:abcdef0919234",
+			Vars: map[string]string{
+				"name":   "foo/bar",
+				"digest": "sha256:abcdef0919234",
+			},
+		},
+		{
+			// invalid digests are matched to be rejected by the handler
+			RouteName:  RouteNameReferrers,
+			RequestURI: "/v2/foo/referrers/bar/referrers/notadigest",
+			Vars: map[string]string{
+				"name":   "foo/referrers/bar",
+				"digest": "notadigest",
+			},
+		},
+		{
 			RouteName:  RouteNameBlob,
 			RequestURI: "/v2/foo/bar/blobs/sha256:abcdef0919234",
 			Vars: map[string]string{

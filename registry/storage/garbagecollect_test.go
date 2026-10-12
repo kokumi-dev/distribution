@@ -3,6 +3,7 @@ package storage
 import (
 	"io"
 	"path"
+	"reflect"
 	"testing"
 
 	"github.com/distribution/distribution/v3"
@@ -920,5 +921,181 @@ func TestTaggedManifestlistWithDeletedReference(t *testing.T) {
 	after := allBlobs(t, registry)
 	if len(after) != 0 {
 		t.Fatalf("Garbage collection affected storage: %d != %d", len(after), 0)
+	}
+}
+
+func TestRemoveUntaggedKeepsReferrersOfTaggedManifest(t *testing.T) {
+	ctx := dcontext.Background()
+	inmemoryDriver := inmemory.New()
+
+	registry := createRegistry(t, inmemoryDriver)
+	repo := makeRepository(t, registry, "referrers/gc")
+	manifestService := makeManifestService(t, repo)
+
+	// a tagged image, with an untagged referrer which has an untagged
+	// referrer itself
+	tagged := uploadRandomOCIImage(t, repo)
+	if err := repo.Tags(ctx).Tag(ctx, "latest", v1.Descriptor{Digest: tagged.manifestDigest}); err != nil {
+		t.Fatalf("failed to tag manifest: %v", err)
+	}
+	referrer := uploadReferrer(t, repo, tagged.manifestDigest, testReferrerArtifactType, "referrer")
+	nested := uploadReferrer(t, repo, referrer, testReferrerArtifactType, "nested")
+
+	// an untagged image with a referrer, and a referrer of a manifest which
+	// does not exist
+	untagged := uploadRandomOCIImage(t, repo)
+	orphan := uploadReferrer(t, repo, untagged.manifestDigest, testReferrerArtifactType, "orphan")
+	dangling := uploadReferrer(t, repo, digest.FromString("missing"), testReferrerArtifactType, "dangling")
+
+	// a dry run must not remove anything
+	err := MarkAndSweep(ctx, inmemoryDriver, registry, GCOpts{
+		DryRun:         true,
+		RemoveUntagged: true,
+	})
+	if err != nil {
+		t.Fatalf("Failed mark and sweep: %v", err)
+	}
+	if manifests := allManifests(t, manifestService); len(manifests) != 6 {
+		t.Fatalf("expected 6 manifests after dry run, got %v", manifests)
+	}
+	if links := referrerLinks(t, inmemoryDriver, repo.Named().Name()); len(links) != 4 {
+		t.Fatalf("expected 4 referrer links after dry run, got %v", links)
+	}
+
+	err = MarkAndSweep(ctx, inmemoryDriver, registry, GCOpts{
+		DryRun:         false,
+		RemoveUntagged: true,
+	})
+	if err != nil {
+		t.Fatalf("Failed mark and sweep: %v", err)
+	}
+
+	manifests := allManifests(t, manifestService)
+	for name, dgst := range map[string]digest.Digest{"tagged": tagged.manifestDigest, "referrer": referrer, "nested": nested} {
+		if _, ok := manifests[dgst]; !ok {
+			t.Fatalf("%s manifest is missing", name)
+		}
+	}
+	for name, dgst := range map[string]digest.Digest{"untagged": untagged.manifestDigest, "orphan": orphan, "dangling": dangling} {
+		if _, ok := manifests[dgst]; ok {
+			t.Fatalf("%s manifest is still present", name)
+		}
+	}
+
+	// the blobs of the referrers which are kept must survive
+	blobs := allBlobs(t, registry)
+	for _, dgst := range []digest.Digest{referrer, nested, v1.DescriptorEmptyJSON.Digest} {
+		if _, ok := blobs[dgst]; !ok {
+			t.Fatalf("blob %s is missing", dgst)
+		}
+	}
+	for _, dgst := range []digest.Digest{untagged.manifestDigest, orphan, dangling} {
+		if _, ok := blobs[dgst]; ok {
+			t.Fatalf("blob %s is still present", dgst)
+		}
+	}
+	if _, err := repo.Blobs(ctx).Stat(ctx, v1.DescriptorEmptyJSON.Digest); err != nil {
+		t.Fatalf("config of the referrers is not linked anymore: %v", err)
+	}
+
+	if referrers := listReferrers(t, repo, tagged.manifestDigest); len(referrers) != 1 || referrers[0].Digest != referrer {
+		t.Fatalf("unexpected referrers of tagged manifest: %v", referrers)
+	}
+	if referrers := listReferrers(t, repo, referrer); len(referrers) != 1 || referrers[0].Digest != nested {
+		t.Fatalf("unexpected referrers of referrer: %v", referrers)
+	}
+
+	// the index entries of the removed referrers are gone
+	expectedLinks := map[digest.Digest]digest.Digest{
+		referrer: tagged.manifestDigest,
+		nested:   referrer,
+	}
+	if links := referrerLinks(t, inmemoryDriver, repo.Named().Name()); !reflect.DeepEqual(links, expectedLinks) {
+		t.Fatalf("unexpected referrer links: %v, expected %v", links, expectedLinks)
+	}
+}
+
+func TestRemoveUntaggedRemovesReferrersOfUntaggedManifest(t *testing.T) {
+	ctx := dcontext.Background()
+	inmemoryDriver := inmemory.New()
+
+	registry := createRegistry(t, inmemoryDriver)
+	repo := makeRepository(t, registry, "referrers/gc")
+	manifestService := makeManifestService(t, repo)
+
+	image := uploadRandomOCIImage(t, repo)
+	if err := repo.Tags(ctx).Tag(ctx, "latest", v1.Descriptor{Digest: image.manifestDigest}); err != nil {
+		t.Fatalf("failed to tag manifest: %v", err)
+	}
+	uploadReferrer(t, repo, image.manifestDigest, testReferrerArtifactType, "referrer")
+
+	// once the tag is gone, the image and its referrer are collected
+	if err := repo.Tags(ctx).Untag(ctx, "latest"); err != nil {
+		t.Fatalf("failed to untag manifest: %v", err)
+	}
+
+	err := MarkAndSweep(ctx, inmemoryDriver, registry, GCOpts{
+		DryRun:         false,
+		RemoveUntagged: true,
+	})
+	if err != nil {
+		t.Fatalf("Failed mark and sweep: %v", err)
+	}
+
+	if manifests := allManifests(t, manifestService); len(manifests) != 0 {
+		t.Fatalf("unexpected manifests: %v", manifests)
+	}
+	if blobs := allBlobs(t, registry); len(blobs) != 0 {
+		t.Fatalf("unexpected blobs: %v", blobs)
+	}
+	if links := referrerLinks(t, inmemoryDriver, repo.Named().Name()); len(links) != 0 {
+		t.Fatalf("unexpected referrer links: %v", links)
+	}
+}
+
+func TestGCRemovesReferrerLinksOfDeletedManifests(t *testing.T) {
+	ctx := dcontext.Background()
+	inmemoryDriver := inmemory.New()
+
+	registry := createRegistry(t, inmemoryDriver)
+	repo := makeRepository(t, registry, "referrers/gc")
+	manifestService := makeManifestService(t, repo)
+
+	image := uploadRandomOCIImage(t, repo)
+	kept := uploadReferrer(t, repo, image.manifestDigest, testReferrerArtifactType, "kept")
+	deleted := uploadReferrer(t, repo, image.manifestDigest, testReferrerArtifactType, "deleted")
+
+	if err := manifestService.Delete(ctx, deleted); err != nil {
+		t.Fatalf("failed deleting manifest digest: %v", err)
+	}
+	if links := referrerLinks(t, inmemoryDriver, repo.Named().Name()); len(links) != 2 {
+		t.Fatalf("expected 2 referrer links before GC, got %v", links)
+	}
+
+	// without removing untagged manifests, untagged referrers are kept
+	err := MarkAndSweep(ctx, inmemoryDriver, registry, GCOpts{
+		DryRun:         false,
+		RemoveUntagged: false,
+	})
+	if err != nil {
+		t.Fatalf("Failed mark and sweep: %v", err)
+	}
+
+	manifests := allManifests(t, manifestService)
+	if _, ok := manifests[kept]; !ok || len(manifests) != 2 {
+		t.Fatalf("unexpected manifests: %v", manifests)
+	}
+	if blobs := allBlobs(t, registry); len(blobs) == 0 {
+		t.Fatal("unexpected removal of all blobs")
+	} else if _, ok := blobs[deleted]; ok {
+		t.Fatal("deleted referrer is still present")
+	}
+
+	expectedLinks := map[digest.Digest]digest.Digest{kept: image.manifestDigest}
+	if links := referrerLinks(t, inmemoryDriver, repo.Named().Name()); !reflect.DeepEqual(links, expectedLinks) {
+		t.Fatalf("unexpected referrer links: %v, expected %v", links, expectedLinks)
+	}
+	if referrers := listReferrers(t, repo, image.manifestDigest); len(referrers) != 1 || referrers[0].Digest != kept {
+		t.Fatalf("unexpected referrers: %v", referrers)
 	}
 }

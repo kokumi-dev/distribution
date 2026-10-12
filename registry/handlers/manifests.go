@@ -363,6 +363,13 @@ func (imh *manifestHandler) PutManifest(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Location", location)
 	w.Header().Set("Docker-Content-Digest", imh.Digest.String())
+	if subject := ocischema.SubjectOf(manifest); subject != nil {
+		// Let the client know the manifest has been added to the referrers
+		// of its subject, so it does not need to maintain the referrers tag.
+		if _, err := referrerService(imh.Context); err == nil {
+			w.Header().Set("OCI-Subject", subject.Digest.String())
+		}
+	}
 	w.WriteHeader(http.StatusCreated)
 
 	dcontext.GetLogger(imh).Debug("Succeeded in putting manifest!")

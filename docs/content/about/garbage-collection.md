@@ -125,5 +125,13 @@ blob eligible for deletion: sha256:f251d679a7c61455f06d793e43c06786d7766c88b8c24
 
 The `--delete-untagged` option can be used to delete manifests that are not currently referenced by a tag.
 
+An untagged manifest is kept if it refers, with its `subject` field, to a
+manifest which is kept. Signatures, SBOMs and other artifacts attached to an
+image therefore stay available through the
+[referrers API](../spec/api.md#listing-referrers) for as long as the image
+does, without having to be tagged. They are deleted together with the image
+once it is not referenced by a tag anymore. Untagged manifests referring to a
+manifest which does not exist in the repository are deleted as well.
+
 The `--quiet` option suppresses any output from being printed.
 

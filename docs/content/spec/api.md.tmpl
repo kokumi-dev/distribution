@@ -1065,6 +1065,82 @@ set in the response. The behavior of the `last` parameter, the provided
 response result, lexical ordering and encoding of the `Link` header are
 identical to that of catalog pagination.
 
+### Listing Referrers
+
+A manifest may refer to another manifest with its `subject` field, for example
+to attach a signature or an SBOM to an image. The image manifests and image
+indexes referring to a manifest, its referrers, can be retrieved with the
+following request, in which `digest` is the digest of the manifest referred
+to:
+
+    GET /v2/<name>/referrers/<digest>
+
+The response is an image index listing the descriptors of the referrers:
+
+    200 OK
+    Content-Type: application/vnd.oci.image.index.v1+json
+
+    {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [
+            {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": "<digest>",
+                "size": <size>,
+                "artifactType": "<artifact type>",
+                "annotations": {
+                    "<key>": "<value>",
+                    ...
+                }
+            },
+            ...
+        ]
+    }
+
+Each descriptor carries the `annotations` and the `artifactType` of the
+referrer. For an image manifest without an `artifactType`, the media type of
+its config is used instead. The descriptors are ordered by digest and the
+response is not paginated.
+
+The manifest identified by `digest` is not required to exist, as referrers may
+be pushed before the manifest they refer to. If there are no referrers, the
+list of `manifests` is empty. A `digest` which is not a valid digest results in
+a `400 Bad Request` response.
+
+The response can be limited to the referrers with a specific artifact type:
+
+    GET /v2/<name>/referrers/<digest>?artifactType=<artifact type>
+
+The filter having been applied is confirmed by a header in the response:
+
+    200 OK
+    Content-Type: application/vnd.oci.image.index.v1+json
+    OCI-Filters-Applied: artifactType
+
+When a manifest with a `subject` is pushed, the digest of the subject is
+returned in the `OCI-Subject` header of the response. It tells the client that
+the manifest has been added to the referrers of its subject, and that there is
+no need to maintain the referrers tag schema of the OCI Distribution
+Specification for it:
+
+    201 Created
+    Location: <url>
+    Docker-Content-Digest: <digest>
+    OCI-Subject: <digest of the subject>
+
+Manifests listed in an image index tagged following the referrers tag schema,
+`<algorithm>-<hex digest of the subject>`, are part of the response as well,
+provided they are present in the repository and have a matching `subject`.
+
+Deleting a manifest does not delete its referrers. They remain listed until
+they are deleted themselves or removed by the
+[garbage collection](../about/garbage-collection.md).
+
+A registry configured as a pull through cache does not list referrers and
+responds with `404 Not Found`. Clients are expected to fall back to the
+referrers tag schema then.
+
 ### Deleting an Image
 
 An image may be deleted from the registry via its `name` and `reference`. A

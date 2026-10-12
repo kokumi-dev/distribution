@@ -8,6 +8,7 @@ import (
 
 	"github.com/distribution/reference"
 	"github.com/gorilla/mux"
+	"github.com/opencontainers/go-digest"
 )
 
 // URLBuilder creates registry API urls from a single base endpoint. It can be
@@ -137,6 +138,19 @@ func (ub *URLBuilder) BuildTagsURL(name reference.Named, values ...url.Values) (
 	}
 
 	return appendValuesURL(tagsURL, values...).String(), nil
+}
+
+// BuildReferrersURL constructs a url to list the referrers of the subject
+// in the named repository.
+func (ub *URLBuilder) BuildReferrersURL(name reference.Named, subject digest.Digest, values ...url.Values) (string, error) {
+	route := ub.cloneRoute(RouteNameReferrers)
+
+	referrersURL, err := route.URL("name", name.Name(), "digest", subject.String())
+	if err != nil {
+		return "", err
+	}
+
+	return appendValuesURL(referrersURL, values...).String(), nil
 }
 
 // BuildManifestURL constructs a url for the manifest identified by name and

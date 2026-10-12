@@ -25,23 +25,28 @@ jobs:
         run: |
           IP=`hostname -I | awk '{print $1}'`
           echo "IP=$IP" >> $GITHUB_ENV
-          echo "OCI_ROOT_URL=http://$IP:5000" >> $GITHUB_ENV
+          echo "OCI_REGISTRY=$IP:5000" >> $GITHUB_ENV
           DISTRIBUTION_REF="registry:local"
           docker run --rm -p 5000:5000 -e REGISTRY_STORAGE_DELETE_ENABLED=true -idt "registry:local"
       -
         name: Run OCI Distribution Spec conformance tests
-        uses: opencontainers/distribution-spec@10efb871ee08eb13678fe275e2cf89b3df86542b # v1.0.1
+        # The conformance tests of the 1.1 spec, including the referrers API,
+        # are not part of a tagged release yet.
+        uses: opencontainers/distribution-spec@97274622c11112caa21efb8c52acca3c6b8fa7f1 # main
         env:
-          OCI_ROOT_URL: ${{ env.OCI_ROOT_URL }}
-          OCI_NAMESPACE: oci-conformance/distribution-test
-          OCI_TEST_PULL: 1
-          OCI_TEST_PUSH: 1
-          OCI_TEST_CONTENT_DISCOVERY: 1
-          OCI_TEST_CONTENT_MANAGEMENT: 1
-          OCI_HIDE_SKIPPED_WORKFLOWS: 1
+          OCI_REGISTRY: ${{ env.OCI_REGISTRY }}
+          OCI_TLS: disabled
+          OCI_REPO1: oci-conformance/distribution-test
+          OCI_REPO2: oci-conformance/distribution-test-mount
+          OCI_VERSION: "1.1"
+          # Content addressed by a digest other than sha256 is not supported.
+          OCI_DATA_SHA512: "false"
+          # Layers with urls are rejected unless allowed by the configuration,
+          # see validation.manifests.urls.
+          OCI_DATA_NONDISTRIBUTABLE: "false"
       -
         name: Move test results
-        run: mkdir -p out/ && mv {report.html,junit.xml} out/
+        run: mkdir -p out/ && mv {report.html,junit.xml,results.yaml} out/
       -
         name: Upload test results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

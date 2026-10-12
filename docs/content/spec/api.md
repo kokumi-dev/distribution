@@ -1065,6 +1065,82 @@ set in the response. The behavior of the `last` parameter, the provided
 response result, lexical ordering and encoding of the `Link` header are
 identical to that of catalog pagination.
 
+### Listing Referrers
+
+A manifest may refer to another manifest with its `subject` field, for example
+to attach a signature or an SBOM to an image. The image manifests and image
+indexes referring to a manifest, its referrers, can be retrieved with the
+following request, in which `digest` is the digest of the manifest referred
+to:
+
+    GET /v2/<name>/referrers/<digest>
+
+The response is an image index listing the descriptors of the referrers:
+
+    200 OK
+    Content-Type: application/vnd.oci.image.index.v1+json
+
+    {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [
+            {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": "<digest>",
+                "size": <size>,
+                "artifactType": "<artifact type>",
+                "annotations": {
+                    "<key>": "<value>",
+                    ...
+                }
+            },
+            ...
+        ]
+    }
+
+Each descriptor carries the `annotations` and the `artifactType` of the
+referrer. For an image manifest without an `artifactType`, the media type of
+its config is used instead. The descriptors are ordered by digest and the
+response is not paginated.
+
+The manifest identified by `digest` is not required to exist, as referrers may
+be pushed before the manifest they refer to. If there are no referrers, the
+list of `manifests` is empty. A `digest` which is not a valid digest results in
+a `400 Bad Request` response.
+
+The response can be limited to the referrers with a specific artifact type:
+
+    GET /v2/<name>/referrers/<digest>?artifactType=<artifact type>
+
+The filter having been applied is confirmed by a header in the response:
+
+    200 OK
+    Content-Type: application/vnd.oci.image.index.v1+json
+    OCI-Filters-Applied: artifactType
+
+When a manifest with a `subject` is pushed, the digest of the subject is
+returned in the `OCI-Subject` header of the response. It tells the client that
+the manifest has been added to the referrers of its subject, and that there is
+no need to maintain the referrers tag schema of the OCI Distribution
+Specification for it:
+
+    201 Created
+    Location: <url>
+    Docker-Content-Digest: <digest>
+    OCI-Subject: <digest of the subject>
+
+Manifests listed in an image index tagged following the referrers tag schema,
+`<algorithm>-<hex digest of the subject>`, are part of the response as well,
+provided they are present in the repository and have a matching `subject`.
+
+Deleting a manifest does not delete its referrers. They remain listed until
+they are deleted themselves or removed by the
+[garbage collection](../about/garbage-collection.md).
+
+A registry configured as a pull through cache does not list referrers and
+responds with `404 Not Found`. Clients are expected to fall back to the
+referrers tag schema then.
+
 ### Deleting an Image
 
 An image may be deleted from the registry via its `name` and `reference`. A
@@ -1116,6 +1192,7 @@ A list of methods and URIs are covered in the table below:
 |------|----|------|-----------|
 | GET | `/v2/` | Base | Check that the endpoint implements Docker Registry API V2. |
 | GET | `/v2/<name>/tags/list` | Tags | Fetch the tags under the repository identified by `name`. |
+| GET | `/v2/<name>/referrers/<digest>` | Referrers | Fetch the list of referrers of the manifest identified by `digest` under the repository identified by `name`. The manifest identified by `digest` is not required to exist. |
 | GET | `/v2/<name>/manifests/<reference>` | Manifest | Fetch the manifest identified by `name` and `reference` where `reference` can be a tag or digest. A `HEAD` request can also be issued to this endpoint to obtain resource information without receiving all data. |
 | PUT | `/v2/<name>/manifests/<reference>` | Manifest | Put the manifest identified by `name` and `reference` where `reference` can be a tag or digest. |
 | DELETE | `/v2/<name>/manifests/<reference>` | Manifest | Delete the manifest or tag identified by `name` and `reference` where `reference` can be a tag or digest. Note that a manifest can _only_ be deleted by digest. |
@@ -1586,6 +1663,397 @@ The error codes that may be included in the response body are enumerated below:
 |----|-------|-----------|
 | `NAME_UNKNOWN` | repository name not known to registry | This is returned if the name used during an operation is unknown to the registry. |
 
+
+###### On Failure: Access Denied
+
+```none
+403 Forbidden
+Content-Length: <length>
+Content-Type: application/json
+
+{
+	"errors": [
+	    {
+            "code": <error code>,
+            "message": "<error message>",
+            "detail": ...
+        },
+        ...
+    ]
+}
+```
+
+The client does not have required access to the repository.
+
+The following headers will be returned on the response:
+
+|Name|Description|
+|----|-----------|
+|`Content-Length`|Length of the JSON response body.|
+
+The error codes that may be included in the response body are enumerated below:
+
+|Code|Message|Description|
+|----|-------|-----------|
+| `DENIED` | requested access to the resource is denied | The access controller denied access for the operation on a resource. |
+
+
+###### On Failure: Too Many Requests
+
+```none
+429 Too Many Requests
+Content-Length: <length>
+Content-Type: application/json
+
+{
+	"errors": [
+	    {
+            "code": <error code>,
+            "message": "<error message>",
+            "detail": ...
+        },
+        ...
+    ]
+}
+```
+
+The client made too many requests within a time interval.
+
+The following headers will be returned on the response:
+
+|Name|Description|
+|----|-----------|
+|`Content-Length`|Length of the JSON response body.|
+
+The error codes that may be included in the response body are enumerated below:
+
+|Code|Message|Description|
+|----|-------|-----------|
+| `TOOMANYREQUESTS` | too many requests | Returned when a client attempts to contact a service too many times |
+
+
+
+
+### Referrers
+
+Retrieve the manifests which refer to another manifest through their `subject` field.
+
+#### GET Referrers
+
+Fetch the list of referrers of the manifest identified by `digest` under the repository identified by `name`. The manifest identified by `digest` is not required to exist.
+##### Referrers
+
+```none
+GET /v2/<name>/referrers/<digest>
+Host: <registry host>
+Authorization: <scheme> <token>
+```
+Return all referrers of the manifest
+The following parameters should be specified on the request:
+
+|Name|Kind|Description|
+|----|----|-----------|
+|`Host`|header|Standard HTTP Host Header. Should be set to the registry host.|
+|`Authorization`|header|An RFC7235 compliant authorization header.|
+|`name`|path|Name of the target repository.|
+|`digest`|path|Digest of the manifest to list the referrers of.|
+
+###### On Success: OK
+
+```none
+200 OK
+Content-Length: <length>
+Content-Type: application/vnd.oci.image.index.v1+json
+
+{
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "manifests": [
+        {
+            "mediaType": "<media type>",
+            "digest": "<digest>",
+            "size": <size>,
+            "artifactType": "<artifact type>",
+            "annotations": {
+                "<key>": "<value>",
+                ...
+            }
+        },
+        ...
+    ]
+}
+```
+
+An image index listing the descriptors of the referrers. The list is empty if there are no referrers.
+
+The following headers will be returned with the response:
+
+|Name|Description|
+|----|-----------|
+|`Content-Length`|Length of the JSON response body.|
+
+
+###### On Failure: Invalid Digest
+
+```none
+400 Bad Request
+Content-Type: application/json
+
+{
+	"errors": [
+	    {
+            "code": <error code>,
+            "message": "<error message>",
+            "detail": ...
+        },
+        ...
+    ]
+}
+```
+
+The provided `digest` is not a valid digest.
+
+The error codes that may be included in the response body are enumerated below:
+
+|Code|Message|Description|
+|----|-------|-----------|
+| `DIGEST_INVALID` | provided digest did not match uploaded content | When a blob is uploaded, the registry will check that the content matches the digest provided by the client. The error may include a detail structure with the key "digest", including the invalid digest string. This error may also be returned when a manifest includes an invalid layer digest. |
+
+
+###### On Failure: Authentication Required
+
+```none
+401 Unauthorized
+WWW-Authenticate: <scheme> realm="<realm>", ..."
+Content-Length: <length>
+Content-Type: application/json
+
+{
+	"errors": [
+	    {
+            "code": <error code>,
+            "message": "<error message>",
+            "detail": ...
+        },
+        ...
+    ]
+}
+```
+
+The client is not authenticated.
+
+The following headers will be returned on the response:
+
+|Name|Description|
+|----|-----------|
+|`WWW-Authenticate`|An RFC7235 compliant authentication challenge header.|
+|`Content-Length`|Length of the JSON response body.|
+
+The error codes that may be included in the response body are enumerated below:
+
+|Code|Message|Description|
+|----|-------|-----------|
+| `UNAUTHORIZED` | authentication required | The access controller was unable to authenticate the client. Often this will be accompanied by a Www-Authenticate HTTP response header indicating how to authenticate. |
+
+
+###### On Failure: Referrers Unavailable
+
+```none
+404 Not Found
+```
+
+The registry cannot list referrers, for example when it is configured as a pull through cache. Clients should fall back to the referrers tag schema.
+
+###### On Failure: Access Denied
+
+```none
+403 Forbidden
+Content-Length: <length>
+Content-Type: application/json
+
+{
+	"errors": [
+	    {
+            "code": <error code>,
+            "message": "<error message>",
+            "detail": ...
+        },
+        ...
+    ]
+}
+```
+
+The client does not have required access to the repository.
+
+The following headers will be returned on the response:
+
+|Name|Description|
+|----|-----------|
+|`Content-Length`|Length of the JSON response body.|
+
+The error codes that may be included in the response body are enumerated below:
+
+|Code|Message|Description|
+|----|-------|-----------|
+| `DENIED` | requested access to the resource is denied | The access controller denied access for the operation on a resource. |
+
+
+###### On Failure: Too Many Requests
+
+```none
+429 Too Many Requests
+Content-Length: <length>
+Content-Type: application/json
+
+{
+	"errors": [
+	    {
+            "code": <error code>,
+            "message": "<error message>",
+            "detail": ...
+        },
+        ...
+    ]
+}
+```
+
+The client made too many requests within a time interval.
+
+The following headers will be returned on the response:
+
+|Name|Description|
+|----|-----------|
+|`Content-Length`|Length of the JSON response body.|
+
+The error codes that may be included in the response body are enumerated below:
+
+|Code|Message|Description|
+|----|-------|-----------|
+| `TOOMANYREQUESTS` | too many requests | Returned when a client attempts to contact a service too many times |
+
+
+
+##### Referrers Filtered
+
+```none
+GET /v2/<name>/referrers/<digest>?artifactType=<media type>
+```
+Return the referrers of the manifest with the requested artifact type.
+The following parameters should be specified on the request:
+
+|Name|Kind|Description|
+|----|----|-----------|
+|`name`|path|Name of the target repository.|
+|`digest`|path|Digest of the manifest to list the referrers of.|
+|`artifactType`|query|Limit the response to referrers with this artifact type. For image manifests without an artifact type, the media type of the config is used.|
+
+###### On Success: OK
+
+```none
+200 OK
+Content-Length: <length>
+OCI-Filters-Applied: artifactType
+Content-Type: application/vnd.oci.image.index.v1+json
+
+{
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "manifests": [
+        {
+            "mediaType": "<media type>",
+            "digest": "<digest>",
+            "size": <size>,
+            "artifactType": "<artifact type>",
+            "annotations": {
+                "<key>": "<value>",
+                ...
+            }
+        },
+        ...
+    ]
+}
+```
+
+An image index listing the descriptors of the referrers with the requested artifact type.
+
+The following headers will be returned with the response:
+
+|Name|Description|
+|----|-----------|
+|`Content-Length`|Length of the JSON response body.|
+|`OCI-Filters-Applied`|Comma separated list of the filters applied to the response.|
+
+
+###### On Failure: Invalid Digest
+
+```none
+400 Bad Request
+Content-Type: application/json
+
+{
+	"errors": [
+	    {
+            "code": <error code>,
+            "message": "<error message>",
+            "detail": ...
+        },
+        ...
+    ]
+}
+```
+
+The provided `digest` is not a valid digest.
+
+The error codes that may be included in the response body are enumerated below:
+
+|Code|Message|Description|
+|----|-------|-----------|
+| `DIGEST_INVALID` | provided digest did not match uploaded content | When a blob is uploaded, the registry will check that the content matches the digest provided by the client. The error may include a detail structure with the key "digest", including the invalid digest string. This error may also be returned when a manifest includes an invalid layer digest. |
+
+
+###### On Failure: Authentication Required
+
+```none
+401 Unauthorized
+WWW-Authenticate: <scheme> realm="<realm>", ..."
+Content-Length: <length>
+Content-Type: application/json
+
+{
+	"errors": [
+	    {
+            "code": <error code>,
+            "message": "<error message>",
+            "detail": ...
+        },
+        ...
+    ]
+}
+```
+
+The client is not authenticated.
+
+The following headers will be returned on the response:
+
+|Name|Description|
+|----|-----------|
+|`WWW-Authenticate`|An RFC7235 compliant authentication challenge header.|
+|`Content-Length`|Length of the JSON response body.|
+
+The error codes that may be included in the response body are enumerated below:
+
+|Code|Message|Description|
+|----|-------|-----------|
+| `UNAUTHORIZED` | authentication required | The access controller was unable to authenticate the client. Often this will be accompanied by a Www-Authenticate HTTP response header indicating how to authenticate. |
+
+
+###### On Failure: Referrers Unavailable
+
+```none
+404 Not Found
+```
+
+The registry cannot list referrers, for example when it is configured as a pull through cache. Clients should fall back to the referrers tag schema.
 
 ###### On Failure: Access Denied
 

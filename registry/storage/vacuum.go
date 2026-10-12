@@ -84,6 +84,27 @@ func (v Vacuum) RemoveManifest(name string, dgst digest.Digest, tags []string) e
 	return v.driver.Delete(v.ctx, manifestPath)
 }
 
+// RemoveReferrerLink removes the entry of a referrer from the referrers
+// index of its subject
+func (v Vacuum) RemoveReferrerLink(repoName string, subject, referrer digest.Digest) error {
+	entryPath, err := pathFor(manifestReferrerEntryPathSpec{name: repoName, subject: subject, referrer: referrer})
+	if err != nil {
+		return err
+	}
+	dcontext.GetLogger(v.ctx).Infof("deleting referrer link: %s", entryPath)
+	err = v.driver.Delete(v.ctx, entryPath)
+	if err != nil {
+		switch err := err.(type) {
+		case driver.PathNotFoundError:
+			return nil
+		default:
+			return err
+		}
+	}
+
+	return nil
+}
+
 // RemoveRepository removes a repository directory from the
 // filesystem
 func (v Vacuum) RemoveRepository(repoName string) error {

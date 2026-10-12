@@ -31,7 +31,10 @@ Cloud infrastructure providers such as [AWS](https://aws.amazon.com/ecr/), [Azur
 
 ## Compatibility
 
-The distribution registry implements the [OCI Distribution Spec](https://github.com/opencontainers/distribution-spec) version 1.0.1.
+The distribution registry implements the [OCI Distribution Spec](https://github.com/opencontainers/distribution-spec) version 1.1, including the [referrers API](spec/api.md#listing-referrers), with the following exceptions:
+
+- Content can only be addressed by `sha256` digests.
+- Manifests with non-distributable layers, which carry `urls`, are rejected unless the URLs are allowed by the [`validation` configuration](about/configuration.md#validation).
 
 ## Basic commands
 

@@ -55,6 +55,24 @@ func makeURLBuilderTestCases(urlBuilder *URLBuilder) []urlBuilderTestCase {
 			},
 		},
 		{
+			description:  "test referrers url",
+			expectedPath: "/v2/foo/bar/referrers/sha256:3b3692957d439ac1928219a83fac91e7bf96c153725526874673ae1f2023f8d5",
+			expectedErr:  nil,
+			build: func() (string, error) {
+				return urlBuilder.BuildReferrersURL(fooBarRef, "sha256:3b3692957d439ac1928219a83fac91e7bf96c153725526874673ae1f2023f8d5")
+			},
+		},
+		{
+			description:  "test referrers url with artifactType query parameter",
+			expectedPath: "/v2/foo/bar/referrers/sha256:3b3692957d439ac1928219a83fac91e7bf96c153725526874673ae1f2023f8d5?artifactType=application%2Fvnd.example.sbom.v1",
+			expectedErr:  nil,
+			build: func() (string, error) {
+				return urlBuilder.BuildReferrersURL(fooBarRef, "sha256:3b3692957d439ac1928219a83fac91e7bf96c153725526874673ae1f2023f8d5", url.Values{
+					"artifactType": []string{"application/vnd.example.sbom.v1"},
+				})
+			},
+		},
+		{
 			description:  "test manifest url tagged ref",
 			expectedPath: "/v2/foo/bar/manifests/tag",
 			expectedErr:  nil,

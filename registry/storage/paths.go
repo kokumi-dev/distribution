@@ -35,6 +35,10 @@ const (
 //	        │   ├── revisions
 //	        │   │   └── <manifest digest path>
 //	        │   │       └── link
+//	        │   ├── referrers
+//	        │   │   └── <subject digest path>
+//	        │   │       └── <referrer digest path>
+//	        │   │           └── link
 //	        │   └── tags
 //	        │       └── <tag>
 //	        │           ├── current
@@ -96,6 +100,13 @@ const (
 //	manifestTagIndexPathSpec:              <root>/v2/repositories/<name>/_manifests/tags/<tag>/index/
 //	manifestTagIndexEntryPathSpec:         <root>/v2/repositories/<name>/_manifests/tags/<tag>/index/<algorithm>/<hex digest>/
 //	manifestTagIndexEntryLinkPathSpec:     <root>/v2/repositories/<name>/_manifests/tags/<tag>/index/<algorithm>/<hex digest>/link
+//
+//	Referrers:
+//
+//	manifestReferrersPathSpec:             <root>/v2/repositories/<name>/_manifests/referrers/
+//	manifestReferrersSubjectPathSpec:      <root>/v2/repositories/<name>/_manifests/referrers/<algorithm>/<hex digest>/
+//	manifestReferrerEntryPathSpec:         <root>/v2/repositories/<name>/_manifests/referrers/<algorithm>/<hex digest>/<algorithm>/<hex digest>/
+//	manifestReferrerEntryLinkPathSpec:     <root>/v2/repositories/<name>/_manifests/referrers/<algorithm>/<hex digest>/<algorithm>/<hex digest>/link
 //
 //	Blobs:
 //
@@ -201,6 +212,37 @@ func pathFor(spec pathSpec) (string, error) {
 		}
 
 		return path.Join(root, path.Join(components...)), nil
+	case manifestReferrersPathSpec:
+		return path.Join(append(repoPrefix, v.name, "_manifests", "referrers")...), nil
+	case manifestReferrersSubjectPathSpec:
+		components, err := digestPathComponents(v.subject, false)
+		if err != nil {
+			return "", err
+		}
+
+		return path.Join(append(append(repoPrefix, v.name, "_manifests", "referrers"), components...)...), nil
+	case manifestReferrerEntryPathSpec:
+		root, err := pathFor(manifestReferrersSubjectPathSpec{
+			name:    v.name,
+			subject: v.subject,
+		})
+		if err != nil {
+			return "", err
+		}
+
+		components, err := digestPathComponents(v.referrer, false)
+		if err != nil {
+			return "", err
+		}
+
+		return path.Join(root, path.Join(components...)), nil
+	case manifestReferrerEntryLinkPathSpec:
+		root, err := pathFor(manifestReferrerEntryPathSpec(v))
+		if err != nil {
+			return "", err
+		}
+
+		return path.Join(root, "link"), nil
 	case layerLinkPathSpec:
 		components, err := digestPathComponents(v.digest, false)
 		if err != nil {
@@ -352,6 +394,44 @@ type manifestTagIndexEntryLinkPathSpec struct {
 }
 
 func (manifestTagIndexEntryLinkPathSpec) pathSpec() {}
+
+// manifestReferrersPathSpec describes the directory holding the referrers
+// index of a repository.
+type manifestReferrersPathSpec struct {
+	name string
+}
+
+func (manifestReferrersPathSpec) pathSpec() {}
+
+// manifestReferrersSubjectPathSpec describes the directory holding the links
+// to all manifests which have the given digest as their subject.
+type manifestReferrersSubjectPathSpec struct {
+	name    string
+	subject digest.Digest
+}
+
+func (manifestReferrersSubjectPathSpec) pathSpec() {}
+
+// manifestReferrerEntryPathSpec contains the entry of a single referrer of a
+// subject.
+type manifestReferrerEntryPathSpec struct {
+	name     string
+	subject  digest.Digest
+	referrer digest.Digest
+}
+
+func (manifestReferrerEntryPathSpec) pathSpec() {}
+
+// manifestReferrerEntryLinkPathSpec describes the link to the revision of a
+// manifest which has the given digest as its subject. The contents of this
+// file should just be the digest of the referrer.
+type manifestReferrerEntryLinkPathSpec struct {
+	name     string
+	subject  digest.Digest
+	referrer digest.Digest
+}
+
+func (manifestReferrerEntryLinkPathSpec) pathSpec() {}
 
 // layersPathSpec contains the path for the layers inside a repo
 type layersPathSpec struct {

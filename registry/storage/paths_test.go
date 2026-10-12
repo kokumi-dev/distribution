@@ -68,6 +68,35 @@ func TestPathMapper(t *testing.T) {
 			},
 			expected: "/docker/registry/v2/repositories/foo/bar/_manifests/tags/thetag/index/sha256/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789/link",
 		},
+		{
+			spec: manifestReferrersPathSpec{
+				name: "foo/bar",
+			},
+			expected: "/docker/registry/v2/repositories/foo/bar/_manifests/referrers",
+		},
+		{
+			spec: manifestReferrersSubjectPathSpec{
+				name:    "foo/bar",
+				subject: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+			},
+			expected: "/docker/registry/v2/repositories/foo/bar/_manifests/referrers/sha256/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+		},
+		{
+			spec: manifestReferrerEntryPathSpec{
+				name:     "foo/bar",
+				subject:  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+				referrer: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			},
+			expected: "/docker/registry/v2/repositories/foo/bar/_manifests/referrers/sha256/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789/sha256/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+		{
+			spec: manifestReferrerEntryLinkPathSpec{
+				name:     "foo/bar",
+				subject:  "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+				referrer: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			},
+			expected: "/docker/registry/v2/repositories/foo/bar/_manifests/referrers/sha256/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789/sha256/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/link",
+		},
 
 		{
 			spec: uploadDataPathSpec{

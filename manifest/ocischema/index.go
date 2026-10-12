@@ -59,8 +59,17 @@ type ImageIndex struct {
 	// MediaType is the media type of this schema.
 	MediaType string `json:"mediaType,omitempty"`
 
+	// ArtifactType is the type of an artifact when the index is used for an
+	// artifact.
+	ArtifactType string `json:"artifactType,omitempty"`
+
 	// Manifests references a list of manifests
 	Manifests []v1.Descriptor `json:"manifests"`
+
+	// Subject is an optional descriptor of another manifest this index
+	// refers to. It is not part of References, as the subject is not
+	// required to exist.
+	Subject *v1.Descriptor `json:"subject,omitempty"`
 
 	// Annotations is an optional field that contains arbitrary metadata for the
 	// image index
